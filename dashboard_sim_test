@@ -1,0 +1,86 @@
+"""
+g29_dashboard.py
+Visual test for G29 — no ESP32 or MQTT needed.
+"""
+import pygame
+
+def pedal_to_0_1(raw):
+    return (1.0 - raw) / 2.0
+
+def normalize_axis(raw, deadzone=0.03):
+    if abs(raw) < deadzone:
+        return 0.0
+    return raw
+
+def draw_bar(surface, x, y, w, h, value, label, color):
+    """Draw a vertical bar, value 0.0–1.0"""
+    pygame.draw.rect(surface, (50, 50, 50), (x, y, w, h))
+    fill_h = int(h * value)
+    pygame.draw.rect(surface, color, (x, y + h - fill_h, w, fill_h))
+    pygame.draw.rect(surface, (200, 200, 200), (x, y, w, h), 2)
+    font = pygame.font.SysFont(None, 24)
+    surface.blit(font.render(label, True, (255,255,255)), (x, y + h + 8))
+    surface.blit(font.render(f"{value:.2f}", True, (255,255,255)), (x, y + h + 28))
+
+def draw_steering(surface, cx, cy, radius, value):
+    """Draw a steering arc, value -1.0 to 1.0"""
+    import math
+    pygame.draw.circle(surface, (50, 50, 50), (cx, cy), radius, 4)
+    angle = value * 135  # max 135 degrees either side
+    rad = math.radians(-angle + 90)
+    ex = int(cx + radius * math.cos(rad))
+    ey = int(cy - radius * math.sin(rad))
+    pygame.draw.line(surface, (0, 200, 255), (cx, cy), (ex, ey), 6)
+    pygame.draw.circle(surface, (0, 200, 255), (cx, cy), 8)
+    font = pygame.font.SysFont(None, 24)
+    surface.blit(font.render("STEERING", True, (255,255,255)),
+                 (cx - 40, cy + radius + 10))
+    surface.blit(font.render(f"{value:.2f}", True, (255,255,255)),
+                 (cx - 20, cy + radius + 30))
+
+def main():
+    pygame.init()
+    pygame.joystick.init()
+
+    if pygame.joystick.get_count() == 0:
+        print("No joystick found!")
+        return
+
+    wheel = pygame.joystick.Joystick(0)
+    wheel.init()
+    print(f"Connected: {wheel.get_name()}")
+
+    screen = pygame.display.set_mode((600, 400))
+    pygame.display.set_caption("G29 Dashboard")
+    clock = pygame.time.Clock()
+
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                running = False
+
+        steering = normalize_axis(wheel.get_axis(0))
+        throttle = pedal_to_0_1(wheel.get_axis(3))
+        brake    = pedal_to_0_1(wheel.get_axis(2))
+        clutch   = pedal_to_0_1(wheel.get_axis(1))
+
+        screen.fill((20, 20, 20))
+
+        # Steering wheel indicator
+        draw_steering(screen, 300, 180, 100, steering)
+
+        # Pedal bars
+        draw_bar(screen,  60, 80, 60, 200, throttle, "THROTTLE", (0, 220, 80))
+        draw_bar(screen, 160, 80, 60, 200, brake,    "BRAKE",    (220, 50, 50))
+        draw_bar(screen, 460, 80, 60, 200, clutch,   "CLUTCH",   (180, 180, 50))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
