@@ -34,7 +34,7 @@ const unsigned int localPort = 4210;
 char packetBuffer[128];
 
 // ===================== STATE =====================
-float steering = 0.0f;
+volatile float steering = 0.0f;
 unsigned long lastSeq = 0;
 int16_t currentSTA = 0;
 
@@ -116,17 +116,19 @@ void receiveUDP() {
 
   packetBuffer[len] = '\0';
 
-  unsigned long seq;
-  float s, t, b;
+  if (strncmp(packetBuffer, "ACK", 3) == 0) return;
 
-  if (sscanf(packetBuffer, "CMD;%lu;%f;%f;%f", &seq, &s, &t, &b) == 4) {
+  unsigned long seq;
+  float s;
+
+  if (sscanf(packetBuffer, "CMD;%lu;%f", &seq, &s) == 2) {
     lastSeq = seq;
     steering = s;
   }
 }
 
 // ---------- DAC ----------
-void updateBaseVoltages() {
+void initBaseVoltages() {
   steer1 = (uint16_t)(2.45 / proper * 4095);
   steer2 = (uint16_t)(2.45 / proper * 4095);
 }
@@ -178,6 +180,7 @@ void setup() {
 
   initCAN();
   initWiFi();
+  initBaseVoltages();
 }
 
 // ===================== LOOP =====================
@@ -198,7 +201,6 @@ void loop() {
 
   receiveUDP();
   readCAN();
-  updateBaseVoltages();
 
   steering = constrain(steering, -1.0f, 1.0f);
 
