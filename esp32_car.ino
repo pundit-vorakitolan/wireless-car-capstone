@@ -57,7 +57,7 @@ float maxTorque = 1500.0;
 void initCAN() {
   SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI, SPI_CS_PIN);
 
-  if (CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_16MHZ) == CAN_OK) {
+  if (CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
     Serial.println("MCP2515 Initialized");
   } else {
     Serial.println("MCP2515 Init Failed");
