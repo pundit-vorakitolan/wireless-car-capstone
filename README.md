@@ -1,5 +1,7 @@
 # Wireless Drive-By-Wire — Capstone Spring 2026
 
+> ⚠️ **WARNING:** This repo is only recent as of Wednesday, April 22nd. Please create another branch and merge the most recent additions to main! Please be sure to keep the readme and presentations.
+
 A system that allows a person to remotely steer a real car using a Logitech G29 steering wheel over the internet.
 
 ---
