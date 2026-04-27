@@ -17,7 +17,8 @@ A system that allows a person to remotely steer a real car using a Logitech G29 
    - [Sender Laptop](#3-sender-laptop)
 5. [Running the System](#running-the-system)
 6. [How It Works](#how-it-works)
-7. [Troubleshooting](#troubleshooting)
+7. [Not Yet Implemented](#not-yet-implemented)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -192,6 +193,68 @@ To stop, press **Ctrl+C**.
    - Two DAC channels output push-pull analog voltages to the steering motor:
      - **DAC Channel C** = midpoint + torque
      - **DAC Channel D** = midpoint − torque
+
+---
+
+## Not Yet Implemented
+
+> The following features are documented here for the next developer to implement. The infrastructure (DAC hardware, G29 pedal axes) is already in place — only the software changes are needed.
+
+### Throttle (Acceleration)
+
+The G29 throttle pedal is on **axis 2**. pygame reports it as -1.0 (fully released) to +1.0 (fully pressed), which must be normalized to 0.0–1.0.
+
+The throttle maps to an `accelmag` offset (range 0–1500) that is added to the baseline DAC voltages on **DAC 1, channels A and B**:
+
+| Channel | Formula | Baseline voltage |
+|---|---|---|
+| DAC 1 Ch A (accel main) | `accel1 + accelmag` | 0.37 V → DAC ~370 |
+| DAC 1 Ch B (accel sub) | `accel2 + (2 × accelmag)` | 0.75 V → DAC ~750 |
+
+Mapping from normalized pedal value to `accelmag`:
+```
+accelmag = throttle_normalized × 1500
+```
+
+### Brakes
+
+The G29 brake pedal is on **axis 3**, normalized the same way as throttle (0.0–1.0).
+
+The brake maps to a `brakemag` offset (range 0–600) applied to **DAC 1, channels C and D**.
+
+> ⚠️ **Important:** The brake channels must always be driven to their baseline voltages even when no braking is commanded. Outputting 0V on these channels is not the same as "no brake" — the car's ECU may interpret it as a fault. The baseline must always be present.
+
+| Channel | Formula | Baseline voltage |
+|---|---|---|
+| DAC 1 Ch C (brake main) | `brake1 - brakemag` | 3.38 V → DAC ~3379 |
+| DAC 1 Ch D (brake sub) | `brake2 + brakemag` | 1.48 V → DAC ~1480 |
+
+Mapping from normalized pedal value to `brakemag`:
+```
+brakemag = brake_normalized × 600
+```
+
+### Changes Required to Implement
+
+**`sender.py`** — re-add throttle and brake axes and include them in the CMD packet:
+```python
+THROTTLE_AXIS_INDEX = 2
+BRAKE_AXIS_INDEX = 3
+
+throttle = normalize_01(js.get_axis(THROTTLE_AXIS_INDEX))
+brake = normalize_01(js.get_axis(BRAKE_AXIS_INDEX))
+msg = f"CMD;{seq};{steer:.4f};{throttle:.4f};{brake:.4f}"
+```
+
+**`esp32_car.ino`** — parse throttle and brake from the CMD packet, compute `accelmag` and `brakemag`, initialize baseline DAC values in `setup()`, and replace the hardcoded `dac.fastWrite(0, 0, 0, 0)` with:
+```cpp
+dac.fastWrite(
+    accel1 + accelmag,
+    accel2 + (2 * accelmag),
+    brake1 - brakemag,
+    brake2 + brakemag
+);
+```
 
 ---
 
