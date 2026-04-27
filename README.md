@@ -25,19 +25,19 @@ A system that allows a person to remotely steer a real car using a Logitech G29 
 ## System Overview
 
 ```
-[Driver]                        [Cloud]                  [Car]
-G29 Wheel
-    │ USB
-Laptop
-(sender.py) ──── internet ──► OCI Relay Server ──── WiFi/hotspot ──► ESP32 on PCB
-                              (relay_server.py)                       (esp32_car.ino)
-                                                                            │
-                                                                       DAC outputs
-                                                                            │
-                                                                       Steering motor
+[Driver Side]                  [Cloud]                    [Car Side]
+
+G29 Wheel ──USB──► Laptop  ──internet──► OCI Relay Server ──WiFi──► ESP32 on PCB
+                 (sender.py)            (relay_server.py)           (esp32_car.ino)
+                                                                           │
+                                                                      DAC outputs
+                                                                           │
+                                                                     Steering motor
 ```
 
-The driver's laptop reads the G29 steering wheel and sends commands over the internet to a cloud relay server. The relay server forwards those commands to an ESP32 microcontroller mounted on a custom PCB inside the car. The ESP32 uses the steering input to drive a PID control loop, outputting analog voltages through DACs to control the car's steering motor.
+The driver's laptop reads the G29 steering wheel and sends control packets over the internet to a cloud relay server (Oracle Cloud). The relay server forwards those packets to an ESP32 microcontroller on a custom PCB inside the car. The ESP32 runs a PID control loop, reading the actual steering angle from the car's CAN bus and outputting corrective voltages through DACs to drive the steering motor.
+
+The relay server is necessary because the ESP32 is behind a mobile hotspot and has no public IP address — it cannot be reached directly from the internet. Instead, the ESP32 registers itself with the relay server on startup, and the relay server uses that registration to forward packets to it.
 
 ---
 
@@ -47,14 +47,14 @@ The driver's laptop reads the G29 steering wheel and sends commands over the int
 |---|---|---|
 | Logitech G29 Steering Wheel | 1 | Connected via USB to the driver's laptop |
 | Driver Laptop | 1 | Any laptop capable of running Python 3 |
-| ESP32 | 1 | Mounted on the car PCB |
-| Custom DBW PCB | 1 | Connects ESP32 to car CAN bus and DACs |
-| MCP2515 CAN Controller | 1 | On PCB — SPI interface to ESP32 |
-| MCP4728 DAC (×2) | 2 | On PCB — I2C interface to ESP32 |
-| Mobile Hotspot | 1 | Car-side WiFi access point for the ESP32 |
-| Car with CAN bus | 1 | Steering angle sensor must output on CAN ID `0x2` |
+| ESP32 | 1 | Mounted on the custom DBW PCB |
+| Custom DBW PCB | 1 | Houses the ESP32, CAN controller, and DACs |
+| MCP2515 CAN Controller | 1 | Already on PCB — reads steering angle from car |
+| MCP4728 DAC (×2) | 2 | Already on PCB — outputs analog voltages to car actuators |
+| Mobile Hotspot | 1 | Provides WiFi for the ESP32 on the car side |
+| Car with CAN bus | 1 | Steering angle sensor must transmit on CAN ID `0x2` |
 
-### Wiring / Pin Reference
+### ESP32 Pin Reference
 
 | Signal | ESP32 Pin |
 |---|---|
@@ -73,100 +73,110 @@ The driver's laptop reads the G29 steering wheel and sends commands over the int
 ### Driver Laptop
 
 - Python 3.8 or newer
-- `pygame` library
+- `pygame` library (for reading the G29)
 
-Install dependencies:
 ```
 pip install pygame
 ```
 
-### OCI Server
+### OCI Relay Server
 
 - Python 3.8 or newer
-- No external libraries required
+- No additional libraries required — uses only the Python standard library
 
 ### ESP32
 
 - Arduino IDE 2.x
-- The following Arduino libraries (install via Library Manager):
+- ESP32 board support package (install via **File → Preferences → Additional Board Manager URLs**, then search "esp32" in **Tools → Board → Board Manager**)
+- The following libraries installed via **Tools → Manage Libraries**:
   - `Adafruit MCP4728`
   - `mcp_can` (by Seeed Studio)
-  - `WiFi` (built into ESP32 Arduino core)
-  - `WiFiUdp` (built into ESP32 Arduino core)
-- ESP32 board support package installed in Arduino IDE
+
+> `WiFi` and `WiFiUdp` are included automatically with the ESP32 board package — do not install them separately.
 
 ---
 
 ## Setup
 
+Complete these steps in order before running the system.
+
 ### 1. OCI Relay Server
 
-The relay server runs on an Oracle Cloud instance with a public IP. It should already be running persistently. If it is not running, SSH into the instance and start it:
+The relay server runs on an Oracle Cloud instance and should already be running persistently. If it is not running, SSH into the instance and start it manually:
 
 ```
 python3 relay_server.py
 ```
 
-You will see:
+When running correctly you will see:
 ```
 Relay server live on port 4210. Waiting for car heartbeat...
 ```
 
-> **Note:** Ensure that UDP port 4210 is open in the OCI instance's security list and firewall rules.
+> **Note:** UDP port 4210 must be open in the OCI security list and the instance's firewall (`iptables` or `firewalld`). If the car never connects, this is the first thing to check.
 
 ---
 
 ### 2. ESP32 (Car PCB)
 
-#### Configure WiFi credentials
+#### Step 1 — Set WiFi credentials
 
-Open `esp32_car.ino` in Arduino IDE. Find the following lines near the top and update them with the hotspot credentials the car will connect to:
+Open `esp32_car.ino` in Arduino IDE and update the following lines with the mobile hotspot's name and password:
 
 ```cpp
 const char* ssid = "YOUR_HOTSPOT_NAME";
 const char* password = "YOUR_HOTSPOT_PASSWORD";
 ```
 
-#### Flash the ESP32
+#### Step 2 — Flash the firmware
 
 1. Connect the ESP32 to your laptop via USB.
-2. Open `esp32_car.ino` in Arduino IDE.
-3. Under **Tools → Board**, select **ESP32 Dev Module**.
-4. Under **Tools → Port**, select the COM port your ESP32 is on.
-5. Click **Upload** (the right-arrow button).
-6. Wait for "Done uploading." to appear.
-7. Open the Serial Monitor (**Tools → Serial Monitor**) and set the baud rate to **115200**.
-8. Power up the hotspot. You should see:
+2. In Arduino IDE, go to **Tools → Board** and select **ESP32 Dev Module**.
+3. Go to **Tools → Port** and select the port your ESP32 is on (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux).
+4. Click **Upload** (→ button). Wait for "Done uploading."
+
+#### Step 3 — Verify connection
+
+1. Open **Tools → Serial Monitor** and set the baud rate to **115200**.
+2. Turn on the mobile hotspot.
+3. Press the reset button on the ESP32. You should see:
 
 ```
 WiFi connected
-ESP32 IP: ...
+ESP32 IP: 10.x.x.x
 UDP listening on port: 4210
 ```
 
-Once connected to WiFi, the ESP32 will automatically begin sending a heartbeat to the relay server every 2 seconds. The relay server terminal will print:
+Once connected, the ESP32 sends a heartbeat to the relay server every 2 seconds. On the relay server terminal you should see:
 
 ```
 CAR CONNECTED: ('x.x.x.x', 4210)
 ```
 
+This confirms the full car-to-server link is working.
+
 ---
 
 ### 3. Sender Laptop
 
-No installation beyond `pip install pygame` is required. Plug in the G29 wheel via USB before running the script.
+1. Plug the G29 into the laptop via USB. Wait for the wheel to complete its self-calibration (it will spin and return to center on its own).
+2. Confirm `pygame` is installed:
+   ```
+   pip install pygame
+   ```
+3. No other configuration is needed. The server IP is already set in `sender.py`.
 
 ---
 
 ## Running the System
 
-Once the relay server is running and the ESP32 is connected and sending heartbeats, start the sender on the driver's laptop:
+Once the relay server is running and the ESP32 shows `CAR CONNECTED` on the server, run the sender on the driver's laptop:
 
 ```
 python3 sender.py
 ```
 
-You will see:
+Expected output:
 ```
 Joystick detected: Logitech G29 Driving Force Racing Wheel
 Sending UDP to 147.224.143.221:4210 at 60 Hz
@@ -177,76 +187,113 @@ seq=1 | steer=0.0012
 
 The system is now live. Turning the G29 wheel will steer the car.
 
-To stop, press **Ctrl+C**.
+Press **Ctrl+C** to stop.
 
 ---
 
 ## How It Works
 
-1. `sender.py` reads the G29 steering axis at 60 Hz and sends a UDP packet formatted as `CMD;<seq>;<steer>` to the OCI server. Steering is a value from -1.0 (full left) to +1.0 (full right).
+### Step 1 — Car registers with the relay server
 
-2. `relay_server.py` receives the packet and forwards it to the last known address of the ESP32, which it learned from the ESP32's periodic `HEARTBEAT` packets.
+When the ESP32 boots, it connects to the mobile hotspot and immediately begins sending a `HEARTBEAT` UDP packet to the relay server every 2 seconds. This does two things:
+- Tells the server the ESP32's current public IP and port
+- Keeps the hotspot's NAT mapping alive so the server can send packets back through it
 
-3. `esp32_car.ino` receives the `CMD` packet, scales the steering value to a target angle in degrees (×250), and runs a PID control loop:
-   - The **actual** steering angle is read from the car's CAN bus (message ID `0x2`)
-   - The PID computes a corrective torque
-   - Two DAC channels output push-pull analog voltages to the steering motor:
-     - **DAC Channel C** = midpoint + torque
-     - **DAC Channel D** = midpoint − torque
+The relay server responds with `ACK` to confirm it is reachable.
+
+### Step 2 — Driver sends steering commands
+
+`sender.py` reads the G29 steering axis at 60 Hz and sends a UDP packet to the relay server formatted as:
+
+```
+CMD;<seq>;<steer>
+```
+
+Where `<steer>` is a float from -1.0 (full left) to +1.0 (full right).
+
+### Step 3 — Relay server forwards to the car
+
+`relay_server.py` receives `CMD` packets from the driver's laptop and forwards them verbatim to the last address it received a `HEARTBEAT` from. If no heartbeat has been received in the last 30 seconds, the packet is dropped and a warning is printed.
+
+### Step 4 — ESP32 drives the steering motor
+
+The ESP32 parses the `CMD` packet and runs the steering value through a PID control loop:
+
+```
+Joystick steer (-1.0 to +1.0)
+        │
+        × 250
+        │
+   targetSTA (degrees)
+        │
+   low-pass smoothing filter
+        │
+   PID controller  ◄── actual angle read from CAN bus (ID 0x2)
+        │
+   torque value (-1500 to +1500)
+        │
+   DAC 2 Ch C = midpoint (2449) + torque  ──►  steering motor
+   DAC 2 Ch D = midpoint (2449) - torque  ──►  (push-pull)
+```
+
+The midpoint DAC value of 2449 corresponds to 2.45 V, which is the zero-torque center point for the steering motor.
 
 ---
 
 ## Not Yet Implemented
 
-> The following features are documented here for the next developer to implement. The infrastructure (DAC hardware, G29 pedal axes) is already in place — only the software changes are needed.
+> The following features are documented here for the next developer. The hardware (DAC channels, G29 pedal axes) is already in place — only software changes are needed.
 
 ### Throttle (Acceleration)
 
-The G29 throttle pedal is on **axis 2**. pygame reports it as -1.0 (fully released) to +1.0 (fully pressed), which must be normalized to 0.0–1.0.
+The G29 throttle pedal is on **axis 2**. pygame reports pedal axes as -1.0 when fully released and +1.0 when fully pressed. This must be normalized to a 0.0–1.0 range before use.
 
-The throttle maps to an `accelmag` offset (range 0–1500) that is added to the baseline DAC voltages on **DAC 1, channels A and B**:
+The normalized throttle value maps to an `accelmag` offset (0–1500) added to the baseline DAC voltages on **DAC 1, channels A and B**:
 
-| Channel | Formula | Baseline voltage |
-|---|---|---|
-| DAC 1 Ch A (accel main) | `accel1 + accelmag` | 0.37 V → DAC ~370 |
-| DAC 1 Ch B (accel sub) | `accel2 + (2 × accelmag)` | 0.75 V → DAC ~750 |
+| Channel | Baseline Voltage | Baseline DAC Value | Formula |
+|---|---|---|---|
+| DAC 1 Ch A (accel main) | 0.37 V | ~370 | `accel1 + accelmag` |
+| DAC 1 Ch B (accel sub) | 0.75 V | ~750 | `accel2 + (2 × accelmag)` |
 
-Mapping from normalized pedal value to `accelmag`:
 ```
 accelmag = throttle_normalized × 1500
 ```
 
 ### Brakes
 
-The G29 brake pedal is on **axis 3**, normalized the same way as throttle (0.0–1.0).
+The G29 brake pedal is on **axis 3**, normalized the same way as throttle.
 
-The brake maps to a `brakemag` offset (range 0–600) applied to **DAC 1, channels C and D**.
+The normalized brake value maps to a `brakemag` offset (0–600) applied to **DAC 1, channels C and D**:
 
-> ⚠️ **Important:** The brake channels must always be driven to their baseline voltages even when no braking is commanded. Outputting 0V on these channels is not the same as "no brake" — the car's ECU may interpret it as a fault. The baseline must always be present.
+| Channel | Baseline Voltage | Baseline DAC Value | Formula |
+|---|---|---|---|
+| DAC 1 Ch C (brake main) | 3.38 V | ~3379 | `brake1 - brakemag` |
+| DAC 1 Ch D (brake sub) | 1.48 V | ~1480 | `brake2 + brakemag` |
 
-| Channel | Formula | Baseline voltage |
-|---|---|---|
-| DAC 1 Ch C (brake main) | `brake1 - brakemag` | 3.38 V → DAC ~3379 |
-| DAC 1 Ch D (brake sub) | `brake2 + brakemag` | 1.48 V → DAC ~1480 |
-
-Mapping from normalized pedal value to `brakemag`:
 ```
 brakemag = brake_normalized × 600
 ```
 
-### Changes Required to Implement
+> ⚠️ **Important:** The brake DAC channels must always be driven to their baseline voltages, even when no braking is commanded. Writing 0V to these channels is not the same as "no brake" and may be interpreted as a fault by the car's ECU.
 
-**`sender.py`** — re-add throttle and brake axes and include them in the CMD packet:
+### Code Changes Required
+
+**`sender.py`** — restore the `normalize_01` helper and re-add throttle/brake to the packet:
+
 ```python
 THROTTLE_AXIS_INDEX = 2
 BRAKE_AXIS_INDEX = 3
+
+def normalize_01(v: float) -> float:
+    return max(0.0, min(1.0, (v + 1.0) / 2.0))
 
 throttle = normalize_01(js.get_axis(THROTTLE_AXIS_INDEX))
 brake = normalize_01(js.get_axis(BRAKE_AXIS_INDEX))
 msg = f"CMD;{seq};{steer:.4f};{throttle:.4f};{brake:.4f}"
 ```
 
-**`esp32_car.ino`** — parse throttle and brake from the CMD packet, compute `accelmag` and `brakemag`, initialize baseline DAC values in `setup()`, and replace the hardcoded `dac.fastWrite(0, 0, 0, 0)` with:
+**`esp32_car.ino`** — update `sscanf` to parse throttle and brake, compute `accelmag` and `brakemag`, initialize baseline DAC values in `setup()`, and replace `dac.fastWrite(0, 0, 0, 0)` with:
+
 ```cpp
 dac.fastWrite(
     accel1 + accelmag,
@@ -262,8 +309,9 @@ dac.fastWrite(
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| `No joystick found.` | G29 not detected | Unplug and replug the G29, then rerun |
-| Relay server never prints `CAR CONNECTED` | ESP32 not reaching server | Check hotspot is on, check OCI firewall allows UDP 4210 |
-| Steering does not respond | CMD packets not reaching ESP32 | Confirm relay server is running and car is connected |
-| Steering runs to the limit | CAN bus not working (no angle feedback) | Check MCP2515 wiring and crystal frequency |
+| `No joystick found.` | G29 not detected by pygame | Unplug and replug the G29, wait for calibration spin, then rerun |
+| Relay server never prints `CAR CONNECTED` | ESP32 cannot reach the server | Confirm hotspot is on; confirm UDP port 4210 is open on OCI |
+| Steering does not respond after `sender.py` starts | CMD packets not reaching ESP32 | Confirm relay server is running and `CAR CONNECTED` was printed |
+| Steering drives to the limit and stays there | CAN bus not working — no angle feedback to PID | Check MCP2515 wiring; verify crystal is 8 MHz |
 | Serial Monitor shows `MCP2515 Init Failed` | SPI wiring issue or wrong CS pin | Check wiring against pin table above |
+| Relay server prints `Car heartbeat timed out` | ESP32 stopped sending heartbeats | Check ESP32 is powered and connected to hotspot |
